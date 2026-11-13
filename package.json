@@ -1,0 +1,15 @@
+{
+  "name": "apphub-backend",
+  "version": "1.0.0",
+  "description": "AppHub Store Backend API (standalone, no external npm deps required)",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js"
+  },
+  "dependencies": {},
+  "engines": {
+    "node": ">=18"
+  }
+}
