@@ -1,15 +1,19 @@
 {
-  "name": "apphub-backend",
+  "name": "apphub-cloudflare-worker",
   "version": "1.0.0",
-  "description": "AppHub Store Backend API (standalone, no external npm deps required)",
-  "main": "src/server.js",
-  "type": "commonjs",
+  "private": true,
+  "description": "AppHub Store API on Cloudflare Workers (KV storage, direct APK links only — no file uploads)",
+  "main": "src/worker.js",
+  "type": "module",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node src/server.js"
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node test-local.mjs",
+    "kv:create": "wrangler kv namespace create APPHUB",
+    "secret:password": "wrangler secret put ADMIN_PASSWORD",
+    "tail": "wrangler tail"
   },
-  "dependencies": {},
-  "engines": {
-    "node": ">=18"
+  "devDependencies": {
+    "wrangler": "^3.99.0"
   }
 }
