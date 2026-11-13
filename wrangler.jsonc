@@ -1,37 +1,16 @@
 {
   "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/schemas/wrangler.jsonc",
-  "name": "apphub-api",
+  "name": "apphub-backend",
   "main": "src/worker.js",
   "compatibility_date": "2025-01-01",
   "compatibility_flags": ["nodejs_compat"],
-
-  // KV namespace that stores apps, categories, versions, admins and sessions.
-  // Created in the Cloudflare dashboard (Storage & Databases -> KV) or with:
-  //   npx wrangler kv namespace create APPHUB
   "kv_namespaces": [
     {
       "binding": "APPHUB",
       "id": "f3c7cff9b24c43c9b69255fc725e7578"
     }
   ],
-
-  // Serves the admin panel (../admin-panel) at /admin, so the panel and the API
-  // share one origin — no CORS setup needed.
-  // run_worker_first makes the Worker run before the asset handler, so "/" can
-  // stay a JSON health route while the panel is mounted at /admin.
-  "assets": {
-    "directory": "../admin-panel",
-    "binding": "ASSETS"
-  },
-  "run_worker_first": true,
-
   "vars": {
     "ADMIN_USERNAME": "admin"
   }
-
-  // The admin password must NOT be committed. Set it as a secret:
-  //   npx wrangler secret put ADMIN_PASSWORD
-  //
-  // Environment variables you may add:
-  //   ADMIN_PASSWORD  — password for the seeded admin (default: admin123)
 }
