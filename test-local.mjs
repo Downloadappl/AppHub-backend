@@ -298,6 +298,210 @@ async function main() {
   body = await res.json();
   check('seed is idempotent', res.status === 200 && body.items.length === 4, `len=${body.items?.length}`);
 
+  /* ------------------------------------------------------------- */
+  /*          DEVELOPER PORTAL & APPLICATION SUBMISSION TESTS      */
+  /* ------------------------------------------------------------- */
+
+  console.log('\n--- Developer Portal & Application Submissions Tests ---');
+
+  // 35. Developer Registration
+  res = await worker.fetch(req('/api/dev/register', {
+    method: 'POST',
+    body: {
+      fullName: 'أحمد المطور',
+      username: 'ahmed_dev',
+      email: 'ahmed@example.com',
+      password: 'password123',
+      confirmPassword: 'password123'
+    }
+  }), env);
+  body = await res.json();
+  check('POST /api/dev/register -> 201 + token', res.status === 201 && body.ok && body.token);
+  const devToken = body.token;
+  const devAuth = { Authorization: 'Bearer ' + devToken };
+
+  // 36. Duplicate register rejected
+  res = await worker.fetch(req('/api/dev/register', {
+    method: 'POST',
+    body: {
+      fullName: 'أحمد آخر',
+      username: 'ahmed_dev',
+      email: 'different@example.com',
+      password: 'password123'
+    }
+  }), env);
+  check('Duplicate username rejected -> 409', res.status === 409);
+
+  // 37. Developer Login
+  res = await worker.fetch(req('/api/dev/login', {
+    method: 'POST',
+    body: { username: 'ahmed_dev', password: 'password123' }
+  }), env);
+  body = await res.json();
+  check('POST /api/dev/login -> 200 + token', res.status === 200 && body.token);
+
+  // 38. Developer Me
+  res = await worker.fetch(req('/api/dev/me', { headers: devAuth }), env);
+  body = await res.json();
+  check('GET /api/dev/me -> profile', res.status === 200 && body.username === 'ahmed_dev');
+
+  // 39. Developer cannot access admin APIs
+  res = await worker.fetch(req('/api/admin/apps', { headers: devAuth }), env);
+  check('Developer token rejected on admin API -> 401', res.status === 401);
+
+  // 40. APK Verification: SSRF Protection
+  res = await worker.fetch(req('/api/dev/verify-apk', {
+    method: 'POST',
+    body: { apkUrl: 'https://localhost/secret.apk' }
+  }), env);
+  body = await res.json();
+  check('SSRF localhost rejected', body.valid === false && body.error.includes('SSRF'));
+
+  res = await worker.fetch(req('/api/dev/verify-apk', {
+    method: 'POST',
+    body: { apkUrl: 'https://192.168.1.1/app.apk' }
+  }), env);
+  body = await res.json();
+  check('SSRF private IP rejected', body.valid === false && body.error.includes('SSRF'));
+
+  res = await worker.fetch(req('/api/dev/verify-apk', {
+    method: 'POST',
+    body: { apkUrl: 'http://example.com/app.apk' }
+  }), env);
+  body = await res.json();
+  check('HTTP without S rejected', body.valid === false && body.error.includes('HTTPS'));
+
+  // 41. Submit New Application (Mocking a valid URL for testing)
+  // Let's test submission with missing required fields
+  res = await worker.fetch(req('/api/dev/submissions', {
+    method: 'POST',
+    headers: devAuth,
+    body: { name: '' }
+  }), env);
+  check('Empty app submission rejected -> 400', res.status === 400);
+
+  // 42. Submit valid app
+  // In our test, global fetch for verifyApkUrl: let's mock globalThis.fetch for apk check or test with a valid mocked endpoint
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const urlStr = typeof input === 'string' ? input : input.url;
+    if (urlStr.includes('cdn.example.com/myapp.apk')) {
+      return new Response(new Uint8Array([0x50, 0x4B, 0x03, 0x04, 0x00, 0x00]), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/vnd.android.package-archive',
+          'Content-Length': '15728640'
+        }
+      });
+    }
+    return originalFetch ? originalFetch(input, init) : new Response('Not found', { status: 404 });
+  };
+
+  res = await worker.fetch(req('/api/dev/submissions', {
+    method: 'POST',
+    headers: devAuth,
+    body: {
+      name: 'Noor Cinema TV',
+      shortDescription: 'تطبيق لمشاهدة الأفلام والمسلسلات العربية',
+      fullDescription: 'تطبيق ترفيهي وسينمائي شامل مصمم خصيصاً لأجهزة وشاشات التلفزيون الذكية مع دعم كامل للريموت.',
+      versionName: '2.0.0',
+      versionCode: 20,
+      sizeBytes: 15728640,
+      developer: 'Noor Media Studio',
+      iconUrl: 'https://images.unsplash.com/photo-cinema.png',
+      screenshots: [
+        'https://images.unsplash.com/screen1.jpg',
+        'https://images.unsplash.com/screen2.jpg'
+      ],
+      apkUrl: 'https://cdn.example.com/myapp.apk',
+      targetType: 'TV',
+      categoryId: 'video'
+    }
+  }), env);
+  body = await res.json();
+  check('POST /api/dev/submissions -> 201 + REQ number', res.status === 201 && body.status === 'pending' && body.reqNumber.startsWith('REQ-'));
+  const subId = body.id;
+
+  // 43. App is NOT in public store while pending
+  res = await worker.fetch(req('/api/apps?q=Noor'), env);
+  body = await res.json();
+  check('Pending submission hidden from public store', res.status === 200 && body.items.length === 0);
+
+  // 44. Developer list submissions
+  res = await worker.fetch(req('/api/dev/submissions'), env);
+  // (without auth -> fails)
+  res = await worker.fetch(req('/api/dev/submissions', { headers: devAuth }), env);
+  body = await res.json();
+  check('GET /api/dev/submissions -> 1 pending', res.status === 200 && body.items.length === 1 && body.items[0].id === subId);
+
+  // 45. Developer notifications
+  res = await worker.fetch(req('/api/dev/notifications', { headers: devAuth }), env);
+  body = await res.json();
+  check('GET /api/dev/notifications -> received welcome and submission notifs', res.status === 200 && body.items.length >= 2);
+
+  // 46. Admin Submissions List & Stats
+  const adminHeaders = { Authorization: 'Bearer ' + auth2 };
+  res = await worker.fetch(req('/api/admin/submissions/stats', { headers: adminHeaders }), env);
+  body = await res.json();
+  check('GET /api/admin/submissions/stats -> pending: 1', res.status === 200 && body.pending === 1);
+
+  res = await worker.fetch(req('/api/admin/submissions?status=pending', { headers: adminHeaders }), env);
+  body = await res.json();
+  check('GET /api/admin/submissions?status=pending -> returns sub', res.status === 200 && body.items.length === 1 && body.items[0].id === subId);
+
+  // 47. Admin Request Changes
+  res = await worker.fetch(req(`/api/admin/submissions/${subId}/request-changes`, {
+    method: 'POST',
+    headers: adminHeaders,
+    body: { notes: 'يرجى تزويدنا بلقطات شاشة بجودة أعلى 1080p' }
+  }), env);
+  body = await res.json();
+  check('POST request-changes -> changes_requested', res.status === 200 && body.submission.status === 'changes_requested');
+
+  // 48. Developer Resubmit
+  res = await worker.fetch(req(`/api/dev/submissions/${subId}`, {
+    method: 'PUT',
+    headers: devAuth,
+    body: {
+      screenshots: [
+        'https://images.unsplash.com/screen1_hd.jpg',
+        'https://images.unsplash.com/screen2_hd.jpg'
+      ]
+    }
+  }), env);
+  body = await res.json();
+  check('Developer edit resubmits -> pending again', res.status === 200 && body.status === 'pending');
+
+  // 49. Admin Approve and Publish
+  res = await worker.fetch(req(`/api/admin/submissions/${subId}/approve`, {
+    method: 'POST',
+    headers: adminHeaders,
+    body: { isFeatured: true }
+  }), env);
+  body = await res.json();
+  check('POST approve -> 200 approved + app created', res.status === 200 && body.ok && body.app && body.submission.status === 'approved');
+  const publishedAppId = body.app.id;
+
+  // 50. Double approval idempotency check
+  res = await worker.fetch(req(`/api/admin/submissions/${subId}/approve`, {
+    method: 'POST',
+    headers: adminHeaders
+  }), env);
+  check('Double approval returns 409 conflict', res.status === 409);
+
+  // 51. App is now live in public store!
+  res = await worker.fetch(req('/api/apps?q=Noor'), env);
+  body = await res.json();
+  check('Published app live in public /api/apps', res.status === 200 && body.items.length === 1 && body.items[0].name === 'Noor Cinema TV');
+
+  // 52. Details endpoint
+  res = await worker.fetch(req(`/api/apps/${publishedAppId}`), env);
+  body = await res.json();
+  check('Published app details accessible -> 200', res.status === 200 && body.id === publishedAppId && body.apkUrl === 'https://cdn.example.com/myapp.apk');
+
+  // Restore fetch
+  globalThis.fetch = originalFetch;
+
   console.log(`\n${pass} passed, ${fail} failed\n`);
   if (fail > 0) process.exit(1);
 }

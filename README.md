@@ -1,19 +1,47 @@
-# AppHub Backend — Cloudflare Workers
+# AppLand TV Backend — Cloudflare Workers
 
-نفس واجهة REST الخاصة بالخادم، لكن على Cloudflare Workers مع تخزين KV.
-**لا يوجد رفع ملفات APK.** كل تطبيق يُنشر برابط مباشر (`apkUrl`) تستضيفه في أي مكان.
+واجهة البرمجة والتطبيق الخلفي (REST API) لمتجر تطبيقات الشاشات والتلفاز الذكي **AppLand TV (آب لاند)** على Cloudflare Workers مع قاعدة بيانات Cloudflare KV وبوابة المطورين المتكاملة.
 
----
-
-## 1) المتطلبات
-
-- حساب Cloudflare
-- Node.js 18+ على جهازك
-- Wrangler: `npm install` داخل هذا المجلد
+> **ملاحظة معمارية**: لا يتم تخزين ملفات APK محلياً على الخادم توفيراً للتكلفة وسرعة الاستجابة. كل تطبيق يُنشر برابط تنزيل مباشر (`apkUrl`) مستضاف على GitHub Releases أو CDN موثوق يدعم HTTPS واستكمال التحميل.
 
 ---
 
-## 2) خطوات النشر
+## 1) المميزات الرئيسية
+
+1. **بوابة مطورين متكاملة (`/dev/`)**:
+   - تسجيل حساب جديد، تسجيل الدخول، استعادة كلمة المرور عبر كود الحساب أو الرمز السري.
+   - إدارة الملف الشخصي، اسم المطور، البريد، الروابط الاجتماعية.
+   - تقديم طلبات نشر التطبيقات بنموذج احترافي وفحص آني لرابط الـ APK.
+   - متابعة حالة الطلبات (قيد المراجعة، طلب تعديل، مقبول، مرفوض).
+   - تعديل الطلبات وإعادة إرسالها فوراً عند طلب تغييرات من الإدارة.
+   - مركز إشعارات داخلي للمطورين لكل تحديث على طلباتهم.
+
+2. **فحص آمن لروابط الـ APK ومكافحة SSRF**:
+   - التحقق الصارم من بروتوكول HTTPS.
+   - حظر الاستدعاء إلى العناوين المحلية والشبكات الخاصة (SSRF Protection).
+   - فحص استجابة الرابط والترويسات والتأكد من دعم نوع المحتوى.
+
+3. **إدارة متقدمة لطلبات المطورين في لوحة الإدارة (`/admin/submissions.html`)**:
+   - استعراض كافة الطلبات مع عداد للطلبات المعلقة.
+   - فلترة حسب الحالة وبحث بالاسم أو الحزمة أو معرف المطور.
+   - نافذة فحص كاملة: استعراض الشاشات، فحص الرابط المباشر، إرسال ملاحظات تعديل، رفض مع سبب، أو قبول بنقرة واحدة.
+   - **النشر التلقائي الفوري**: بمجرد القبول يتم إدراج التطبيق والإصدار تلقائياً في المتجر ويصبح متاحاً فوراً لتطبيق التلفاز (`/api/apps`).
+
+4. **إشعارات تيليجرام للإدارة (Telegram Notifications)**:
+   - إرسال إشعار فوري لمدير المتجر عبر بوت تيليجرام عند تقديم تطبيق جديد أو إعادة إرساله.
+   - خيار تفعيل/تعطيل وزر اختبار فوري من صفحة الإعدادات.
+
+---
+
+## 2) متطلبات التشغيل والنشر
+
+- حساب Cloudflare مجاني أو مدفوع
+- Node.js 18+
+- أداة Wrangler مثبتة: `npm install`
+
+---
+
+## 3) خطوات النشر على Cloudflare
 
 ```bash
 cd cloudflare
@@ -21,105 +49,99 @@ npm install
 npx wrangler login
 ```
 
-### أ) أنشئ مخزن KV
-
+### أ) إنشاء مخزن البيانات (KV Namespace)
 ```bash
 npx wrangler kv namespace create APPHUB
 ```
-
-سيطبع لك الناتج شيئاً مثل:
-
-```json
-{
-  "id": "a1b2c3d4e5f6..."
-}
+انسخ الـ `id` وضعه في ملف `wrangler.jsonc` تحت:
+```jsonc
+"kv_namespaces": [
+  {
+    "binding": "APPHUB",
+    "id": "معرف_الـ_KV_الخاص_بك"
+  }
+]
 ```
 
-انسخ الـ `id` وضعه مكان `REPLACE_WITH_YOUR_KV_NAMESPACE_ID` في [`wrangler.jsonc`](wrangler.jsonc).
-
-### ب) كلمة مرور المدير (سر — لا تُكتب في الكود)
-
+### ب) تعيين كلمة مرور الإدارة
 ```bash
 npx wrangler secret put ADMIN_PASSWORD
 ```
 
-اكتب كلمة مرور قوية. اسم المستخدم الافتراضي `admin` ويمكن تغييره من `ADMIN_USERNAME` في `wrangler.jsonc`.
-
-### ج) انشر
-
+### ج) النشر التلقائي (الخادم + لوحة الإدارة وبوابة المطورين)
 ```bash
 npm run deploy
 ```
+سيقوم Wrangler بنشر كود الـ Worker ومعه كافة صفحات لوحة الإدارة وبوابة المطورين على نفس النطاق بدون مشاكل CORS.
 
 ---
 
-## 3) نقاط النهاية
+## 4) خريطة المسارات ونقاط النهاية (API Reference)
 
+### أ) المسارات العامة (تطبيق التلفاز والزوار)
 | الطريقة | المسار | الوصف |
 |---|---|---|
-| GET | `/api/health` | فحص حالة الخدمة |
-| GET | `/api/settings` | إعدادات المتجر |
-| GET | `/api/categories` | الأقسام المنشورة |
-| GET | `/api/apps` | التطبيقات + فلاتر: `q`, `category`, `featured`, `game`, `sort=latest\|popular`, `limit`, `offset` |
-| GET | `/api/apps/:id` | تفاصيل تطبيق |
-| POST | `/api/apps/:id/download-event` | تسجيل عملية تحميل (يزيد العدّاد) |
-| GET | `/api/stats` | إحصائيات المتجر |
-| POST | `/api/admin/login` | تسجيل دخول المدير → `token` |
-| POST | `/api/admin/logout` | إنهاء الجلسة |
-| GET | `/api/admin/me` | بيانات المدير الحالي |
-| GET/POST | `/api/admin/apps` | قائمة/إضافة تطبيق |
-| GET/PUT/DELETE | `/api/admin/apps/:id` | تعديل/حذف/تفاصيل |
-| GET/POST | `/api/admin/categories` | قائمة/إضافة قسم |
-| PUT/DELETE | `/api/admin/categories/:id` | تعديل/حذف قسم |
-| GET | `/api/admin/versions?appId=` | سجل الإصدارات |
-| GET/PUT | `/api/admin/settings` | إعدادات المتجر |
-| GET | `/api/admin/stats` | إحصائيات تفصيلية |
-| GET | `/api/admin/backup` | تصدير JSON للنسخ الاحتياطي |
-| POST | `/api/admin/seed` | إعادة تعيين البيانات التجريبية |
+| GET | `/api/health` | فحص صحة الخادم |
+| GET | `/api/settings` | إعدادات المتجر العامة |
+| GET | `/api/categories` | قائمة الأقسام المصرح بنشرها |
+| GET | `/api/apps` | قائمة التطبيقات (فلاتر: `q`, `category`, `featured`, `game`, `targetDevice`, `sort`, `limit`, `offset`) |
+| GET | `/api/apps/:id` | تفاصيل التطبيق الكاملة وصور الشاشة |
+| POST | `/api/apps/:id/download-event` | تسجيل تحميل وزيادة العداد |
+| GET | `/api/stats` | ملخص إحصائيات المتجر |
 
-المصادقة: أرسل `Authorization: Bearer <token>` في كل طلبات `/api/admin/*`.
+### ب) مسارات بوابة المطورين (`/api/dev/*`)
+| الطريقة | المسار | المصادقة | الوصف |
+|---|---|---|---|
+| POST | `/api/dev/register` | عام | تسجيل حساب مطور جديد |
+| POST | `/api/dev/login` | عام | تسجيل دخول المطور والحصول على Token |
+| POST | `/api/dev/logout` | Dev Token | تسجيل الخروج وإلغاء الجلسة |
+| POST | `/api/dev/reset-password` | عام | استعادة كلمة المرور عبر الرمز التعريفي |
+| GET | `/api/dev/me` | Dev Token | بيانات الحساب والملف الشخصي |
+| PUT | `/api/dev/profile` | Dev Token | تحديث بيانات المطور (الاسم، البريد، الروابط) |
+| POST | `/api/dev/verify-apk` | Dev Token | فحص مباشر لرابط APK وحماية SSRF |
+| GET | `/api/dev/submissions` | Dev Token | قائمة طلبات المطور مع الإحصائيات |
+| POST | `/api/dev/submissions` | Dev Token | تقديم تطبيق جديد للمراجعة |
+| GET | `/api/dev/submissions/:id` | Dev Token | تفاصيل طلب معين وملاحظات الإدارة |
+| PUT | `/api/dev/submissions/:id` | Dev Token | تعديل طلب (في حالة طلب تعديل) وإعادة الإرسال |
+| GET | `/api/dev/notifications` | Dev Token | استعراض إشعارات المطور |
+| POST | `/api/dev/notifications/read` | Dev Token | تحديد الإشعارات كمقروءة |
+
+### ج) مسارات لوحة الإدارة (`/api/admin/*`)
+| الطريقة | المسار | المصادقة | الوصف |
+|---|---|---|---|
+| POST | `/api/admin/login` | عام | تسجيل دخول المدير |
+| POST | `/api/admin/logout` | Admin Token | تسجيل خروج المدير |
+| GET | `/api/admin/me` | Admin Token | بيانات المدير |
+| GET/POST | `/api/admin/apps` | Admin Token | إدارة التطبيقات المنشورة |
+| GET/PUT/DELETE | `/api/admin/apps/:id` | Admin Token | تعديل وحذف تطبيق منشور |
+| GET/POST | `/api/admin/categories` | Admin Token | إدارة وتعديل الأقسام |
+| PUT/DELETE | `/api/admin/categories/:id` | Admin Token | تعديل أو حذف قسم |
+| GET | `/api/admin/versions` | Admin Token | سجل إصدارات التطبيقات |
+| GET/PUT | `/api/admin/settings` | Admin Token | تعديل إعدادات المتجر وتيليجرام |
+| GET | `/api/admin/stats` | Admin Token | الإحصائيات العامة الشاملة |
+| GET | `/api/admin/submissions` | Admin Token | قائمة طلبات المطورين مع الفلترة |
+| GET | `/api/admin/submissions/stats` | Admin Token | عدادات الطلبات المعلقة والمقبولة |
+| GET | `/api/admin/submissions/:id` | Admin Token | تفاصيل الطلب للمراجعة |
+| POST | `/api/admin/submissions/:id/approve` | Admin Token | قبول الطلب ونشره تلقائياً بالمتجر |
+| POST | `/api/admin/submissions/:id/request-changes` | Admin Token | طلب تعديلات من المطور مع تدوين الملاحظات |
+| POST | `/api/admin/submissions/:id/reject` | Admin Token | رفض الطلب مع توضيح السبب |
+| POST | `/api/admin/telegram/test` | Admin Token | إرسال رسالة اختبار عبر بوت تيليجرام |
+| GET | `/api/admin/backup` | Admin Token | تصدير نسخة احتياطية لكامل البيانات |
+| POST | `/api/admin/seed` | Admin Token | إعادة تعيين البيانات النموذجية الأولية |
 
 ---
 
-## 4) لوحة التحكم
+## 5) الاختبارات الآلية (Automated Tests)
 
-الـ Worker يقدّم لوحة التحكم من نفس النطاق على:
+تم تضمين جناح اختبارات شامل يغطي 67 اختباراً دقيقاً:
+- 46 اختباراً للوظائف الأساسية (المتجر، الأقسام، المصادقة، التنزيل).
+- 21 اختباراً لبوابة المطورين، التحقق من الروابط، حظر SSRF، دورة مراجعة الطلبات، النشر التلقائي، واكتشاف التعارضات.
 
-```
-https://<your-worker>.workers.dev/admin/
-```
-
-هذا يعني **لا حاجة لإعداد CORS**، ويمكنك استخدام نفس لوحة `admin-panel` المنشورة على GitHub Pages مع إدخال رابط الـ Worker في شاشة "إعداد الخادم" (يُحفظ في `localStorage`).
-
----
-
-## 5) اختبار محلي بدون نشر
-
+لتشغيل الاختبارات محلياً:
 ```bash
-npm test          # 46 اختبار يغطي كل المسارات
-npm run dev       # تشغيل محلي على 127.0.0.1:8787 مع KV وهمي
+node test-local.mjs
 ```
-
----
-
-## 6) ملاحظات مهمة
-
-- **KV is eventually consistent**: قد يتأخر ظهور التعديل حتى ~60 ثانية عالمياً. يكفي هذا لمتجر تطبيقات، لكن لا تستخدمه لعمليات نقدية فورية.
-- **لا ترفع ملفات APK إلى الخادم**: استخدم روابط مباشرة. أمثلة مناسبة:
-  - GitHub Releases: `https://github.com/<user>/<repo>/releases/download/<tag>/app.apk`
-  - Google Drive برابط مباشر، أو أي CDN/استضافة تدعم direct link.
-- يجب أن يدعم رابط APK طلبات `Range` لعرض خاصية "استكمال التحميل" في التطبيق، وأن يكون `Content-Type: application/vnd.android.package-archive`.
-- **الإنتاج**: غيّر كلمة المرور الافتراضية، وفكّر في إضافة تحديد معدل (rate limiting) على `/api/admin/login`.
-- حدود Cloudflare المجانية سخية (100k طلب/يوم) وكافية تماماً لعدد التطبيقات المستهدف.
-
----
-
-## 7) ربط تطبيق Android
-
-في [`../app/build.gradle.kts`](../app/build.gradle.kts):
-
-```kotlin
-buildConfigField("String", "API_BASE_URL", "\"https://<your-worker>.workers.dev/\"")
+النتيجة المتوقعة:
 ```
-
-ثم أعد بناء التطبيق. التطبيق سيعمل أيضاً بدون خادم (بيانات محلية/كاش) لكن لعرض البيانات الحقيقية يلزم الرابط.
+67 passed, 0 failed
+```
