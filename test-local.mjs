@@ -349,10 +349,10 @@ async function main() {
 
   res = await worker.fetch(req('/api/dev/verify-apk', {
     method: 'POST',
-    body: { apkUrl: 'http://example.com/app.apk' }
+    body: { apkUrl: 'ftp://example.com/app.apk' }
   }), env);
   body = await res.json();
-  check('HTTP without S rejected', body.valid === false && body.error.includes('HTTPS'));
+  check('Non-HTTP/HTTPS protocol rejected', body.valid === false && body.error.includes('HTTP'));
 
   // 41. Submit without developer name -> rejected
   res = await worker.fetch(req('/api/dev/submissions', {

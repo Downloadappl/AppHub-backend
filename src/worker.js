@@ -356,9 +356,9 @@ async function verifyApkUrl(urlStr) {
     return { valid: false, error: 'صيغة الرابط غير صحيحة' };
   }
 
-  // 1. Must be HTTPS
-  if (parsed.protocol !== 'https:') {
-    return { valid: false, error: 'يجب أن يبدأ الرابط بـ HTTPS حصراً لضمان الأمان والتوافق' };
+  // 1. Must be HTTP or HTTPS
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    return { valid: false, error: 'يجب أن يبدأ الرابط بـ HTTP أو HTTPS لضمان التوافق' };
   }
 
   // 2. SSRF Protection
@@ -407,7 +407,7 @@ async function verifyApkUrl(urlStr) {
     // SSRF re-check on final URL if redirected
     if (res.url) {
       const finalUrl = new URL(res.url);
-      if (finalUrl.protocol !== 'https:' || isPrivateIpOrHost(finalUrl.hostname)) {
+      if ((finalUrl.protocol !== 'https:' && finalUrl.protocol !== 'http:') || isPrivateIpOrHost(finalUrl.hostname)) {
         return { valid: false, error: 'تم توجيه الرابط إلى وجهة غير آمنة أو غير مسموحة' };
       }
     }
