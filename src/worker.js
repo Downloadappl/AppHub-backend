@@ -12,7 +12,7 @@
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Admin-Token, X-Dev-Token',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Admin-Token, X-Dev-Token, X-Dev-Id, X-Dev-Name',
   'Access-Control-Max-Age': '86400'
 };
 
@@ -25,16 +25,22 @@ const DEFAULT_SETTINGS = {
   telegramChatId: ''
 };
 
+const DEFAULT_SECTIONS = [
+  { id: 'apps', name: 'تطبيقات عامة', icon: 'smartphone', order: 1, published: true },
+  { id: 'tv_entertainment', name: 'تطبيقات التلفزيون والترفيه', icon: 'tv', order: 2, published: true },
+  { id: 'games', name: 'ألعاب التلفزيون', icon: 'gamepad-2', order: 3, published: true }
+];
+
 const DEFAULT_CATEGORIES = [
-  { id: 'all', name: 'جميع التطبيقات', icon: null, order: 0, published: true },
-  { id: 'video', name: 'تطبيقات المشاهدة', icon: null, order: 1, published: true },
-  { id: 'sports', name: 'الرياضة', icon: null, order: 2, published: true },
-  { id: 'tools', name: 'الأدوات', icon: null, order: 3, published: true },
-  { id: 'ai', name: 'الذكاء الاصطناعي', icon: null, order: 4, published: true },
-  { id: 'social', name: 'التواصل الاجتماعي', icon: null, order: 5, published: true },
-  { id: 'tv', name: 'تطبيقات التلفزيون', icon: null, order: 6, published: true },
-  { id: 'games', name: 'الألعاب', icon: null, order: 7, published: true },
-  { id: 'misc', name: 'تطبيقات متنوعة', icon: null, order: 8, published: true }
+  { id: 'all', sectionId: 'apps', name: 'جميع التطبيقات', icon: null, order: 0, published: true },
+  { id: 'video', sectionId: 'tv_entertainment', name: 'تطبيقات المشاهدة', icon: 'tv', order: 1, published: true },
+  { id: 'sports', sectionId: 'tv_entertainment', name: 'الرياضة', icon: null, order: 2, published: true },
+  { id: 'tools', sectionId: 'apps', name: 'الأدوات', icon: null, order: 3, published: true },
+  { id: 'ai', sectionId: 'apps', name: 'الذكاء الاصطناعي', icon: null, order: 4, published: true },
+  { id: 'social', sectionId: 'apps', name: 'التواصل الاجتماعي', icon: null, order: 5, published: true },
+  { id: 'tv', sectionId: 'tv_entertainment', name: 'تطبيقات التلفزيون', icon: null, order: 6, published: true },
+  { id: 'games', sectionId: 'games', name: 'الألعاب', icon: null, order: 7, published: true },
+  { id: 'misc', sectionId: 'apps', name: 'تطبيقات متنوعة', icon: null, order: 8, published: true }
 ];
 
 const SAMPLE_APPS = [
@@ -98,6 +104,7 @@ function splitList(v) {
 
 const DB_KEYS = [
   'apps',
+  'sections',
   'categories',
   'versions',
   'downloads',
@@ -112,6 +119,7 @@ const DB_KEYS = [
 
 const EMPTY_DB = () => ({
   apps: [],
+  sections: [],
   categories: [],
   versions: [],
   downloads: [],
@@ -136,6 +144,22 @@ async function getDb(env) {
   if (!db.dev_sessions) db.dev_sessions = [];
   if (!db.submissions) db.submissions = [];
   if (!db.notifications) db.notifications = [];
+  if (!db.sections || !db.sections.length) {
+    db.sections = JSON.parse(JSON.stringify(DEFAULT_SECTIONS));
+  }
+  if (!db.categories || !db.categories.length) {
+    db.categories = JSON.parse(JSON.stringify(DEFAULT_CATEGORIES));
+  }
+  // Ensure every category has a valid sectionId
+  if (db.categories && db.categories.length) {
+    db.categories.forEach(c => {
+      if (!c.sectionId) {
+        if (c.id === 'games') c.sectionId = 'games';
+        else if (['video', 'sports', 'tv'].includes(c.id)) c.sectionId = 'tv_entertainment';
+        else c.sectionId = 'apps';
+      }
+    });
+  }
   return db;
 }
 
@@ -198,6 +222,8 @@ function mkApp(o) {
     apkUrl: o.apkUrl || null,
     sha256: o.sha256 || null,
     packageName: o.packageName || null,
+    sectionId: o.sectionId || null,
+    sectionName: o.sectionName || null,
     categoryId: o.categoryId || 'misc',
     categoryName: o.categoryName || 'تطبيقات متنوعة',
     isFeatured: toBool(o.isFeatured, false),
@@ -214,13 +240,27 @@ function mkApp(o) {
 
 function sampleDbApps() {
   const now = new Date().toISOString();
-  return SAMPLE_APPS.map(row => mkApp({
-    id: row[0], name: row[1], shortDescription: row[2], fullDescription: row[3],
-    versionName: row[4], versionCode: row[5], sizeBytes: row[6], developer: row[7],
-    categoryId: row[8], categoryName: row[9], isFeatured: row[10], isGame: row[11],
-    targetType: row[12], downloadCount: row[13], keywords: row[14],
-    createdAt: now, updatedAt: now
-  }));
+  return SAMPLE_APPS.map(row => {
+    const catId = row[8];
+    const catName = row[9];
+    let secId = 'apps';
+    let secName = 'تطبيقات عامة';
+    if (catId === 'games') {
+      secId = 'games';
+      secName = 'ألعاب التلفزيون';
+    } else if (['video', 'sports', 'tv'].includes(catId)) {
+      secId = 'tv_entertainment';
+      secName = 'تطبيقات التلفزيون والترفيه';
+    }
+    return mkApp({
+      id: row[0], name: row[1], shortDescription: row[2], fullDescription: row[3],
+      versionName: row[4], versionCode: row[5], sizeBytes: row[6], developer: row[7],
+      sectionId: secId, sectionName: secName,
+      categoryId: catId, categoryName: catName, isFeatured: row[10], isGame: row[11],
+      targetType: row[12], downloadCount: row[13], keywords: row[14],
+      createdAt: now, updatedAt: now
+    });
+  });
 }
 
 async function ensureSeed(env) {
@@ -243,6 +283,7 @@ async function ensureSeed(env) {
     });
   }
 
+  if (!db.sections.length) db.sections = JSON.parse(JSON.stringify(DEFAULT_SECTIONS));
   if (!db.categories.length) db.categories = JSON.parse(JSON.stringify(DEFAULT_CATEGORIES));
   if (!db.apps.length) db.apps = sampleDbApps();
 
@@ -492,6 +533,7 @@ function computeStats(db) {
     totalApps: apps.length,
     totalGames: games.length,
     totalDownloads,
+    totalSections: (db.sections || []).length,
     totalCategories: (db.categories || []).length,
     pendingSubmissions,
     totalDevelopers: (db.developers || []).length,
@@ -500,10 +542,21 @@ function computeStats(db) {
   };
 }
 
-function normalizeCategory(body) {
+function normalizeSection(body) {
+  return {
+    id: body.id || `sec_${Date.now()}`,
+    name: (body.name || 'قسم جديد').toString(),
+    icon: body.icon || 'folder',
+    order: toNum(body.order, 0),
+    published: toBool(body.published, true)
+  };
+}
+
+function normalizeCategory(body, defaultSectionId = 'apps') {
   return {
     id: body.id || `cat_${Date.now()}`,
-    name: (body.name || 'قسم جديد').toString(),
+    sectionId: body.sectionId || defaultSectionId,
+    name: (body.name || 'فئة جديدة').toString(),
     icon: body.icon || null,
     order: toNum(body.order, 0),
     published: toBool(body.published, true)
@@ -621,16 +674,45 @@ export default {
         return json(db.settings || DEFAULT_SETTINGS);
       }
 
+      if (method === 'GET' && pathname === '/api/sections') {
+        const secs = [...(db.sections || [])]
+          .filter(s => toBool(s.published, true))
+          .sort((a, b) => toNum(a.order, 0) - toNum(b.order, 0));
+        return json({ items: secs });
+      }
+
       if (method === 'GET' && pathname === '/api/categories') {
-        const cats = [...(db.categories || [])]
+        const sectionId = url.searchParams.get('sectionId');
+        let cats = [...(db.categories || [])].filter(c => toBool(c.published, true));
+        if (sectionId) {
+          cats = cats.filter(c => c.sectionId === sectionId);
+        }
+        cats.sort((a, b) => toNum(a.order, 0) - toNum(b.order, 0));
+        return json({ items: cats });
+      }
+
+      if (method === 'GET' && pathname === '/api/options') {
+        const sections = [...(db.sections || [])]
+          .filter(s => toBool(s.published, true))
+          .sort((a, b) => toNum(a.order, 0) - toNum(b.order, 0));
+        const categories = [...(db.categories || [])]
           .filter(c => toBool(c.published, true))
           .sort((a, b) => toNum(a.order, 0) - toNum(b.order, 0));
-        return json({ items: cats });
+        return json({
+          sections,
+          categories,
+          targetTypes: [
+            { id: 'TV', name: 'Android TV (مخصص للشاشات وأجهزة التلفزيون)', hint: 'الواجهة مخصصة للتحكم بالريموت كونترول' },
+            { id: 'BOTH', name: 'Both (متوافق مع الشاشات والهواتف)', hint: 'يعمل بسلاسة على التلفاز والهاتف الذكي' },
+            { id: 'PHONE', name: 'Android Phone (هواتف فقط)', hint: 'مخصص للهواتف والأجهزة اللوحية' }
+          ]
+        });
       }
 
       if (method === 'GET' && pathname === '/api/apps') {
         const q = (url.searchParams.get('q') || '').toLowerCase().trim();
         const category = url.searchParams.get('category');
+        const section = url.searchParams.get('section');
         const featured = url.searchParams.get('featured');
         const game = url.searchParams.get('game');
         const sort = url.searchParams.get('sort');
@@ -644,6 +726,10 @@ export default {
         if (targetType) {
           const t = targetType.toUpperCase();
           apps = apps.filter(a => a.targetType === t || a.targetType === 'BOTH');
+        }
+
+        if (section && section !== 'all') {
+          apps = apps.filter(a => a.sectionId === section);
         }
 
         if (category && category !== 'all') {
@@ -753,7 +839,18 @@ export default {
         if (!body.apkUrl || !String(body.apkUrl).trim()) return badRequest('رابط APK المباشر مطلوب');
 
         const categoryId = body.categoryId || 'misc';
-        const category = (db.categories || []).find(c => c.id === categoryId) || { id: 'misc', name: 'تطبيقات متنوعة' };
+        const category = (db.categories || []).find(c => c.id === categoryId) || { id: 'misc', name: 'تطبيقات متنوعة', sectionId: 'apps' };
+
+        let section = null;
+        if (body.sectionId) {
+          section = (db.sections || []).find(s => s.id === body.sectionId);
+        }
+        if (!section && category.sectionId) {
+          section = (db.sections || []).find(s => s.id === category.sectionId);
+        }
+        if (!section) {
+          section = (db.sections || [])[0] || { id: 'apps', name: 'تطبيقات عامة' };
+        }
 
         // Verify APK link
         const verification = await verifyApkUrl(body.apkUrl);
@@ -761,8 +858,13 @@ export default {
           return badRequest(`فشل التحقق من رابط APK: ${verification.error}`);
         }
 
-        const screenshots = Array.isArray(body.screenshots) ? body.screenshots.slice(0, 5) : [];
-        if (screenshots.length === 0 && body.screenshot) screenshots.push(body.screenshot);
+        let screenshots = [];
+        if (Array.isArray(body.screenshots)) {
+          screenshots = body.screenshots.map(s => String(s).trim()).filter(Boolean).slice(0, 5);
+        } else if (typeof body.screenshots === 'string') {
+          screenshots = body.screenshots.split(/[\r\n,]+/).map(s => s.trim()).filter(Boolean).slice(0, 5);
+        }
+        if (screenshots.length === 0 && body.screenshot) screenshots.push(String(body.screenshot).trim());
 
         const now = new Date().toISOString();
         const reqNumber = generateReqNumber(db);
@@ -779,10 +881,12 @@ export default {
           versionName: body.versionName || '1.0.0',
           versionCode: toNum(body.versionCode, 1),
           sizeBytes: toNum(body.sizeBytes || verification.sizeBytes, 0),
-          iconUrl: body.iconUrl,
+          iconUrl: String(body.iconUrl).trim(),
           screenshots,
           apkUrl: body.apkUrl.trim(),
           targetType: (body.targetType || 'TV').toUpperCase(),
+          sectionId: section.id,
+          sectionName: section.name,
           categoryId: category.id,
           categoryName: category.name,
           shortDescription: body.shortDescription || '',
@@ -810,7 +914,7 @@ export default {
           `👤 <b>المطور:</b> ${sub.devName}\n` +
           `🔖 <b>رقم الطلب:</b> <code>${sub.reqNumber}</code>\n` +
           `📺 <b>الجهاز المستهدف:</b> ${sub.targetType}\n` +
-          `📂 <b>القسم:</b> ${sub.categoryName}\n\n` +
+          `📂 <b>القسم:</b> ${sub.sectionName} — ${sub.categoryName}\n\n` +
           `🔗 راجع الطلب في لوحة الإدارة`
         );
 
@@ -844,19 +948,35 @@ export default {
             }
           }
           if (body.name) sub.name = String(body.name).trim();
-          if (body.iconUrl) sub.iconUrl = body.iconUrl;
-          if (body.screenshots && Array.isArray(body.screenshots)) sub.screenshots = body.screenshots.slice(0, 5);
+          if (body.iconUrl) sub.iconUrl = String(body.iconUrl).trim();
+          if (body.screenshots) {
+            sub.screenshots = (Array.isArray(body.screenshots) ? body.screenshots : splitList(body.screenshots)).map(s => String(s).trim()).filter(Boolean).slice(0, 5);
+          }
           if (body.shortDescription !== undefined) sub.shortDescription = body.shortDescription;
           if (body.fullDescription !== undefined) sub.fullDescription = body.fullDescription;
           if (body.targetType) sub.targetType = body.targetType.toUpperCase();
           if (body.versionName) sub.versionName = body.versionName;
           if (body.versionCode) sub.versionCode = toNum(body.versionCode, sub.versionCode);
           if (body.sizeBytes) sub.sizeBytes = toNum(body.sizeBytes, sub.sizeBytes);
+          if (body.sectionId) {
+            const sec = (db.sections || []).find(s => s.id === body.sectionId);
+            if (sec) {
+              sub.sectionId = sec.id;
+              sub.sectionName = sec.name;
+            }
+          }
           if (body.categoryId) {
             const cat = (db.categories || []).find(c => c.id === body.categoryId);
             if (cat) {
               sub.categoryId = cat.id;
               sub.categoryName = cat.name;
+              if (!sub.sectionId && cat.sectionId) {
+                const sec = (db.sections || []).find(s => s.id === cat.sectionId);
+                if (sec) {
+                  sub.sectionId = sec.id;
+                  sub.sectionName = sec.name;
+                }
+              }
             }
           }
 
@@ -1025,7 +1145,7 @@ export default {
 
           // Create app entry in public store
           const appId = sub.publishedAppId || `app_${Date.now()}`;
-          const isGame = toBool(body.isGame !== undefined ? body.isGame : (sub.categoryId === 'games'), false);
+          const isGame = toBool(body.isGame !== undefined ? body.isGame : (sub.sectionId === 'games' || sub.categoryId === 'games'), false);
           const isFeatured = toBool(body.isFeatured !== undefined ? body.isFeatured : false, false);
 
           const app = normalizeApp({
@@ -1036,11 +1156,13 @@ export default {
             versionName: body.versionName || sub.versionName,
             versionCode: toNum(body.versionCode || sub.versionCode, 1),
             sizeBytes: toNum(body.sizeBytes || sub.sizeBytes, 0),
-            developer: body.developer || sub.developer,
+            developer: body.developer || sub.developer || sub.devName,
             iconUrl: body.iconUrl || sub.iconUrl,
             screenshots: body.screenshots || sub.screenshots,
             apkUrl: (body.apkUrl || sub.apkUrl).trim(),
             packageName: body.packageName || sub.packageName,
+            sectionId: body.sectionId || sub.sectionId,
+            sectionName: body.sectionName || sub.sectionName,
             categoryId: body.categoryId || sub.categoryId,
             categoryName: body.categoryName || sub.categoryName,
             targetType: (body.targetType || sub.targetType || 'TV').toUpperCase(),
@@ -1254,6 +1376,62 @@ export default {
           }
         }
 
+        // ---- SECTIONS (ADMIN) ----
+        if (method === 'GET' && pathname === '/api/admin/sections') {
+          return json({ items: db.sections || [] });
+        }
+
+        if (method === 'POST' && pathname === '/api/admin/sections') {
+          const body = await readBody(request);
+          if (!body.name || !String(body.name).trim()) return badRequest('اسم القسم مطلوب');
+          let id = body.id ? String(body.id).trim() : `sec_${Date.now()}`;
+          if ((db.sections || []).some(s => s.id === id)) {
+            return json({ error: 'معرّف القسم مستخدم مسبقاً' }, 409);
+          }
+          const sec = normalizeSection(Object.assign({}, body, { id }));
+          db.sections = db.sections || [];
+          db.sections.push(sec);
+          await saveDb(env, db);
+          return json(sec, 201);
+        }
+
+        const adminSecMatch = /^\/api\/admin\/sections\/([^/]+)$/.exec(pathname);
+        if (adminSecMatch) {
+          const id = decodeURIComponent(adminSecMatch[1]);
+          const idx = (db.sections || []).findIndex(s => s.id === id);
+          if (idx === -1) return notFound('القسم غير موجود');
+
+          if (method === 'GET') return json(db.sections[idx]);
+
+          if (method === 'PUT') {
+            const body = await readBody(request);
+            const before = db.sections[idx];
+            const updated = Object.assign({}, before, {
+              name: body.name !== undefined ? String(body.name).trim() : before.name,
+              icon: body.icon !== undefined ? body.icon : before.icon,
+              order: body.order !== undefined ? toNum(body.order, before.order) : before.order,
+              published: body.published !== undefined ? toBool(body.published, before.published) : before.published
+            });
+            db.sections[idx] = updated;
+
+            // Update sectionName in any categories referencing this section
+            if (db.categories && before.name !== updated.name) {
+              db.categories.forEach(c => {
+                if (c.sectionId === id) c.sectionName = updated.name;
+              });
+            }
+
+            await saveDb(env, db);
+            return json(updated);
+          }
+
+          if (method === 'DELETE') {
+            db.sections.splice(idx, 1);
+            await saveDb(env, db);
+            return json({ ok: true, deleted: id });
+          }
+        }
+
         // ---- CATEGORIES (ADMIN) ----
         if (method === 'GET' && pathname === '/api/admin/categories') {
           return json({ items: db.categories || [] });
@@ -1261,12 +1439,13 @@ export default {
 
         if (method === 'POST' && pathname === '/api/admin/categories') {
           const body = await readBody(request);
-          if (!body.name || !String(body.name).trim()) return badRequest('اسم القسم مطلوب');
+          if (!body.name || !String(body.name).trim()) return badRequest('اسم الفئة مطلوب');
           let id = body.id ? String(body.id).trim() : `cat_${Date.now()}`;
           if ((db.categories || []).some(c => c.id === id)) {
-            return json({ error: 'معرّف القسم مستخدم مسبقاً' }, 409);
+            return json({ error: 'معرّف الفئة مستخدم مسبقاً' }, 409);
           }
-          const cat = normalizeCategory(Object.assign({}, body, { id }));
+          const defaultSecId = (db.sections && db.sections[0] ? db.sections[0].id : 'apps');
+          const cat = normalizeCategory(Object.assign({}, body, { id }), defaultSecId);
           db.categories = db.categories || [];
           db.categories.push(cat);
           await saveDb(env, db);
@@ -1285,6 +1464,7 @@ export default {
             const body = await readBody(request);
             const before = db.categories[idx];
             const updated = Object.assign({}, before, {
+              sectionId: body.sectionId !== undefined ? body.sectionId : before.sectionId,
               name: body.name !== undefined ? String(body.name).trim() : before.name,
               icon: body.icon !== undefined ? body.icon : before.icon,
               order: body.order !== undefined ? toNum(body.order, before.order) : before.order,
@@ -1328,6 +1508,7 @@ export default {
           return json({
             exportedAt: new Date().toISOString(),
             apps: db.apps || [],
+            sections: db.sections || [],
             categories: db.categories || [],
             versions: db.versions || [],
             submissions: db.submissions || [],
@@ -1337,11 +1518,12 @@ export default {
         }
 
         if (method === 'POST' && pathname === '/api/admin/seed') {
+          db.sections = JSON.parse(JSON.stringify(DEFAULT_SECTIONS));
           db.categories = JSON.parse(JSON.stringify(DEFAULT_CATEGORIES));
           db.apps = sampleDbApps();
           db.versions = [];
           await saveDb(env, db);
-          return json({ ok: true, apps: db.apps.length, categories: db.categories.length });
+          return json({ ok: true, apps: db.apps.length, sections: db.sections.length, categories: db.categories.length });
         }
 
         return notFound();

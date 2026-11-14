@@ -519,6 +519,107 @@ async function main() {
   body = await res.json();
   check('Published app details accessible -> 200', res.status === 200 && body.id === publishedAppId && body.developer === clientDevName);
 
+  // --- Dynamic Sections & Categories Integration Tests ---
+  console.log('\n--- Dynamic Sections & Categories Integration Tests ---');
+
+  // 58. GET /api/sections
+  res = await worker.fetch(req('/api/sections'), env);
+  body = await res.json();
+  check('GET /api/sections -> returns seeded sections', res.status === 200 && Array.isArray(body.items) && body.items.length >= 3);
+  check('Sections contains apps, tv_entertainment, games', body.items.some(s => s.id === 'apps') && body.items.some(s => s.id === 'games'));
+
+  // 59. GET /api/options
+  res = await worker.fetch(req('/api/options'), env);
+  body = await res.json();
+  check('GET /api/options -> returns sections, categories, and targetTypes',
+    res.status === 200 && Array.isArray(body.sections) && Array.isArray(body.categories) && Array.isArray(body.targetTypes) && body.targetTypes.length === 3);
+
+  // 60. GET /api/categories?sectionId=games
+  res = await worker.fetch(req('/api/categories?sectionId=games'), env);
+  body = await res.json();
+  check('GET /api/categories?sectionId=games -> returns only game categories',
+    res.status === 200 && body.items.every(c => c.sectionId === 'games'));
+
+  // 61. POST /api/admin/sections (create new section)
+  res = await worker.fetch(req('/api/admin/sections', {
+    method: 'POST',
+    headers: freshAdminHeaders,
+    body: { name: 'قسم جديد تجريبي', id: 'test_sec', icon: 'sparkles', order: 10 }
+  }), env);
+  body = await res.json();
+  check('POST /api/admin/sections -> 201 created', res.status === 201 && body.id === 'test_sec' && body.name === 'قسم جديد تجريبي');
+
+  // 62. Verify new section appears immediately in /api/sections
+  res = await worker.fetch(req('/api/sections'), env);
+  body = await res.json();
+  check('New section visible immediately in public /api/sections', body.items.some(s => s.id === 'test_sec'));
+
+  // 63. PUT /api/admin/sections/:id (edit section)
+  res = await worker.fetch(req('/api/admin/sections/test_sec', {
+    method: 'PUT',
+    headers: freshAdminHeaders,
+    body: { name: 'قسم معدل' }
+  }), env);
+  body = await res.json();
+  check('PUT /api/admin/sections/:id -> updated', res.status === 200 && body.name === 'قسم معدل');
+
+  // 64. POST /api/admin/categories with sectionId
+  res = await worker.fetch(req('/api/admin/categories', {
+    method: 'POST',
+    headers: freshAdminHeaders,
+    body: { name: 'فئة تابعة للقسم المعدل', id: 'test_cat_sub', sectionId: 'test_sec', order: 1 }
+  }), env);
+  body = await res.json();
+  check('POST /api/admin/categories with sectionId -> 201 created', res.status === 201 && body.sectionId === 'test_sec');
+
+  // 65. Verify category appears under section
+  res = await worker.fetch(req('/api/categories?sectionId=test_sec'), env);
+  body = await res.json();
+  check('Category filtered under its section', body.items.length === 1 && body.items[0].id === 'test_cat_sub');
+
+  // 66. Submit app using this new section and category with direct image URL and screenshot URLs
+  res = await worker.fetch(req('/api/dev/submissions', {
+    method: 'POST',
+    body: {
+      name: 'تطبيق القسم الديناميكي',
+      developerName: 'مطور الأقسام',
+      targetType: 'TV',
+      sectionId: 'test_sec',
+      categoryId: 'test_cat_sub',
+      iconUrl: 'https://cdn.example.com/dynamic-icon.png',
+      screenshots: [
+        'https://cdn.example.com/shot1.png',
+        'https://cdn.example.com/shot2.png'
+      ],
+      apkUrl: 'https://cdn.example.com/myapp.apk',
+      shortDescription: 'تطبيق تجريبي للأقسام الديناميكية',
+      fullDescription: 'وصف كامل للتطبيق الديناميكي'
+    }
+  }), env);
+  body = await res.json();
+  check('POST submission with dynamic section & category -> 201',
+    res.status === 201 && body.sectionId === 'test_sec' && body.categoryId === 'test_cat_sub');
+  check('Submission saves screenshots array and direct iconUrl',
+    body.iconUrl === 'https://cdn.example.com/dynamic-icon.png' && body.screenshots.length === 2);
+  const dynamicSubId = body.id;
+
+  // 67. Approve submission and verify app preserves section and category
+  res = await worker.fetch(req(`/api/admin/submissions/${dynamicSubId}/approve`, {
+    method: 'POST',
+    headers: freshAdminHeaders
+  }), env);
+  body = await res.json();
+  check('Approved app carries sectionId, sectionName, categoryId, categoryName',
+    res.status === 200 && body.app.sectionId === 'test_sec' && body.app.categoryId === 'test_cat_sub' && body.app.iconUrl === 'https://cdn.example.com/dynamic-icon.png');
+
+  // 68. DELETE /api/admin/sections/:id
+  res = await worker.fetch(req('/api/admin/sections/test_sec', {
+    method: 'DELETE',
+    headers: freshAdminHeaders
+  }), env);
+  body = await res.json();
+  check('DELETE /api/admin/sections/:id -> deleted', res.status === 200 && body.ok);
+
   // Restore fetch
   globalThis.fetch = originalFetch;
 
