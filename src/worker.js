@@ -273,18 +273,6 @@ async function requireAdmin(request, env, db) {
   return { admin };
 }
 
-async function requireDeveloper(request, env, db) {
-  const token = bearerToken(request, 'authorization') || bearerToken(request, 'x-dev-token');
-  if (!token) return { error: unauthorized('يرجى تسجيل الدخول كـ مطور للوصول لهذه الصفحة') };
-  const now = Date.now();
-  db.dev_sessions = (db.dev_sessions || []).filter(s => new Date(s.expiresAt).getTime() > now);
-  const session = db.dev_sessions.find(s => s.token === token);
-  if (!session) return { error: unauthorized('جلسة المطور منتهية أو غير صالحة') };
-  const dev = (db.developers || []).find(d => d.id === session.devId);
-  if (!dev) return { error: unauthorized('حساب المطور غير موجود') };
-  return { developer: dev };
-}
-
 /* ----------------------- APK Link Verification & SSRF ---------------- */
 
 function isPrivateIpOrHost(hostname) {
@@ -720,342 +708,175 @@ export default {
       /*                      DEVELOPER PORTAL API (/api/dev/*)               */
       /* ==================================================================== */
 
-      // 1. Developer Registration
-      if (method === 'POST' && pathname === '/api/dev/register') {
-        const body = await readBody(request);
-        const { fullName, username, email, password, confirmPassword } = body;
-
-        if (!fullName || !String(fullName).trim()) return badRequest('الاسم الكامل مطلوب');
-        if (!username || !String(username).trim()) return badRequest('اسم المستخدم مطلوب');
-        if (!email || !String(email).trim() || !email.includes('@')) return badRequest('بريد إلكتروني صالح مطلوب');
-        if (!password || String(password).length < 6) return badRequest('كلمة المرور يجب أن لا تقل عن 6 أحرف');
-        if (confirmPassword && password !== confirmPassword) return badRequest('كلمتا المرور غير متطابقتين');
-
-        const cleanUsername = String(username).trim().toLowerCase();
-        const cleanEmail = String(email).trim().toLowerCase();
-
-        db.developers = db.developers || [];
-        if (db.developers.some(d => d.username === cleanUsername)) {
-          return json({ error: 'اسم المستخدم مسجل مسبقاً' }, 409);
-        }
-        if (db.developers.some(d => d.email === cleanEmail)) {
-          return json({ error: 'البريد الإلكتروني مسجل مسبقاً' }, 409);
-        }
-
-        const salt = toHex(crypto.getRandomValues(new Uint8Array(16)));
-        const passwordHash = await hashPassword(password, salt);
-        const now = new Date().toISOString();
-
-        const dev = {
-          id: `dev_${Date.now()}_${crypto.randomUUID().slice(0, 6)}`,
-          fullName: String(fullName).trim(),
-          username: cleanUsername,
-          email: cleanEmail,
-          passwordHash,
-          salt,
-          status: 'active',
-          createdAt: now,
-          updatedAt: now
-        };
-
-        db.developers.push(dev);
-
-        // Auto login session on register
-        const token = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
-        const expiresAt = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString();
-        db.dev_sessions = db.dev_sessions || [];
-        db.dev_sessions.push({ token, devId: dev.id, createdAt: now, expiresAt });
-
-        // Welcome notification
-        sendDevNotification(
-          db,
-          dev.id,
-          null,
-          'مرحباً بك في بوابة مطوري AppLand',
-          'تم إنشاء حسابك بنجاح. يمكنك الآن البدء بتقديم تطبيقاتك للشاشات وأجهزة Android TV.',
-          'success'
-        );
-
-        await saveDb(env, db);
-
-        return json({
-          ok: true,
-          token,
-          developer: { id: dev.id, fullName: dev.fullName, username: dev.username, email: dev.email }
-        }, 201);
-      }
-
-      // 2. Developer Login
-      if (method === 'POST' && pathname === '/api/dev/login') {
-        const body = await readBody(request);
-        const identifier = String(body.username || body.email || '').trim().toLowerCase();
-        const password = String(body.password || '');
-
-        if (!identifier || !password) return badRequest('اسم المستخدم وكلمة المرور مطلوبان');
-
-        const dev = (db.developers || []).find(d => d.username === identifier || d.email === identifier);
-        if (!dev) return unauthorized('بيانات الدخول غير صحيحة');
-
-        const computedHash = await hashPassword(password, dev.salt);
-        if (!safeEqual(computedHash, dev.passwordHash)) {
-          return unauthorized('بيانات الدخول غير صحيحة');
-        }
-
-        const token = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
-        const now = new Date().toISOString();
-        const expiresAt = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString();
-
-        db.dev_sessions = db.dev_sessions || [];
-        db.dev_sessions.push({ token, devId: dev.id, createdAt: now, expiresAt });
-        await saveDb(env, db);
-
-        return json({
-          ok: true,
-          token,
-          developer: { id: dev.id, fullName: dev.fullName, username: dev.username, email: dev.email }
-        });
-      }
-
-      // 3. Developer Logout
-      if (method === 'POST' && pathname === '/api/dev/logout') {
-        const token = bearerToken(request, 'authorization') || bearerToken(request, 'x-dev-token');
-        if (token) {
-          db.dev_sessions = (db.dev_sessions || []).filter(s => s.token !== token);
-          await saveDb(env, db);
-        }
-        return json({ ok: true });
-      }
-
-      // 4. Developer Password Recovery Request
-      if (method === 'POST' && pathname === '/api/dev/reset-password') {
-        const body = await readBody(request);
-        const email = String(body.email || '').trim().toLowerCase();
-        const dev = (db.developers || []).find(d => d.email === email);
-        if (!dev) {
-          // Do not reveal email existence for security
-          return json({ ok: true, message: 'إذا كان البريد مسجلاً فستصلك تعليمات الاستعادة' });
-        }
-        // In real world an email is sent; for immediate dashboard utility we provide recovery confirmation
-        return json({
-          ok: true,
-          message: 'تم استلام طلب الاستعادة. يمكنك مراجعة الدعم أو تحديث كلمة المرور عبر ملفك الشخصي.'
-        });
-      }
-
-      // 5. Test/Verify APK link (Can be called before submission)
+      // 1. Verify APK link (HTTPS & SSRF protected)
       if (method === 'POST' && pathname === '/api/dev/verify-apk') {
         const body = await readBody(request);
         const result = await verifyApkUrl(body.url || body.apkUrl);
         return json(result);
       }
 
-      // --- Authenticated Developer Endpoints ---
-      if (pathname.startsWith('/api/dev/')) {
-        const authResult = await requireDeveloper(request, env, db);
-        if (authResult.error) return authResult.error;
-        const currentDev = authResult.developer;
+      // 2. List developer's submissions (filtered by devId or ids or devName)
+      if (method === 'GET' && pathname === '/api/dev/submissions') {
+        const devId = url.searchParams.get('devId');
+        const ids = url.searchParams.get('ids');
+        const devName = url.searchParams.get('devName');
+        const status = url.searchParams.get('status');
 
-        // Current developer profile
-        if (method === 'GET' && pathname === '/api/dev/me') {
-          return json({
-            id: currentDev.id,
-            fullName: currentDev.fullName,
-            username: currentDev.username,
-            email: currentDev.email,
-            createdAt: currentDev.createdAt
-          });
+        let items = db.submissions || [];
+        if (devId) {
+          items = items.filter(s => s.devId === devId);
+        } else if (ids) {
+          const idList = ids.split(',').map(s => s.trim());
+          items = items.filter(s => idList.includes(s.id) || idList.includes(s.reqNumber));
+        } else if (devName) {
+          items = items.filter(s => (s.devName || s.developer || '').toLowerCase() === devName.toLowerCase());
+        } else {
+          // If no filter, return empty array to prevent exposing other developers' pending submissions
+          items = [];
         }
 
-        // Update profile
-        if (method === 'PUT' && pathname === '/api/dev/profile') {
+        if (status && status !== 'all') {
+          items = items.filter(s => s.status === status);
+        }
+        items.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        return json({ items });
+      }
+
+      // 3. Create new application submission (No login required; saves developer name)
+      if (method === 'POST' && pathname === '/api/dev/submissions') {
+        const body = await readBody(request);
+
+        const devName = String(body.developerName || body.devName || body.developer || '').trim();
+        if (!devName) return badRequest('اسم المطور مطلوب');
+        if (!body.name || !String(body.name).trim()) return badRequest('اسم التطبيق مطلوب');
+        if (!body.iconUrl || !String(body.iconUrl).trim()) return badRequest('أيقونة التطبيق مطلوبة');
+        if (!body.apkUrl || !String(body.apkUrl).trim()) return badRequest('رابط APK المباشر مطلوب');
+
+        const categoryId = body.categoryId || 'misc';
+        const category = (db.categories || []).find(c => c.id === categoryId) || { id: 'misc', name: 'تطبيقات متنوعة' };
+
+        // Verify APK link
+        const verification = await verifyApkUrl(body.apkUrl);
+        if (!verification.valid) {
+          return badRequest(`فشل التحقق من رابط APK: ${verification.error}`);
+        }
+
+        const screenshots = Array.isArray(body.screenshots) ? body.screenshots.slice(0, 5) : [];
+        if (screenshots.length === 0 && body.screenshot) screenshots.push(body.screenshot);
+
+        const now = new Date().toISOString();
+        const reqNumber = generateReqNumber(db);
+        const devId = String(body.developerId || body.devId || ('dev_' + crypto.randomUUID().slice(0, 8)));
+
+        const sub = {
+          id: `sub_${Date.now()}_${crypto.randomUUID().slice(0, 6)}`,
+          reqNumber,
+          devId,
+          devName,
+          developer: devName,
+          name: String(body.name).trim(),
+          packageName: body.packageName || `com.${devName.toLowerCase().replace(/[^a-z0-9]/g, '') || 'app'}.${String(body.name).toLowerCase().replace(/[^a-z0-9]/g, '')}`,
+          versionName: body.versionName || '1.0.0',
+          versionCode: toNum(body.versionCode, 1),
+          sizeBytes: toNum(body.sizeBytes || verification.sizeBytes, 0),
+          iconUrl: body.iconUrl,
+          screenshots,
+          apkUrl: body.apkUrl.trim(),
+          targetType: (body.targetType || 'TV').toUpperCase(),
+          categoryId: category.id,
+          categoryName: category.name,
+          shortDescription: body.shortDescription || '',
+          fullDescription: body.fullDescription || body.shortDescription || '',
+          status: 'pending', // Strictly pending! Developer cannot approve or publish
+          adminNotes: null,
+          rejectionReason: null,
+          reviewedBy: null,
+          reviewedAt: null,
+          publishedAppId: null,
+          apkVerification: verification,
+          createdAt: now,
+          updatedAt: now
+        };
+
+        db.submissions = db.submissions || [];
+        db.submissions.unshift(sub);
+
+        // Telegram notification to Admin if configured
+        await sendTelegramNotification(
+          env,
+          db,
+          `📥 <b>طلب تطبيق جديد في AppLand</b>\n\n` +
+          `📱 <b>التطبيق:</b> ${sub.name}\n` +
+          `👤 <b>المطور:</b> ${sub.devName}\n` +
+          `🔖 <b>رقم الطلب:</b> <code>${sub.reqNumber}</code>\n` +
+          `📺 <b>الجهاز المستهدف:</b> ${sub.targetType}\n` +
+          `📂 <b>القسم:</b> ${sub.categoryName}\n\n` +
+          `🔗 راجع الطلب في لوحة الإدارة`
+        );
+
+        await saveDb(env, db);
+        return json(sub, 201);
+      }
+
+      // 4. Details and resubmission of specific submission
+      const devSubMatch = /^\/api\/dev\/submissions\/([^/]+)$/.exec(pathname);
+      if (devSubMatch) {
+        const id = decodeURIComponent(devSubMatch[1]);
+        const sub = (db.submissions || []).find(s => s.id === id || s.reqNumber === id);
+        if (!sub) return notFound('الطلب غير موجود');
+
+        if (method === 'GET') {
+          return json(sub);
+        }
+
+        // Edit submission (only allowed if pending or changes_requested)
+        if (method === 'PUT') {
+          if (sub.status !== 'pending' && sub.status !== 'changes_requested') {
+            return badRequest('لا يمكن تعديل هذا الطلب في حالته الحالية');
+          }
+
           const body = await readBody(request);
-          if (body.fullName) currentDev.fullName = String(body.fullName).trim();
-          if (body.email && body.email.includes('@')) {
-            const cleanEmail = String(body.email).trim().toLowerCase();
-            if (cleanEmail !== currentDev.email && (db.developers || []).some(d => d.email === cleanEmail && d.id !== currentDev.id)) {
-              return json({ error: 'البريد الإلكتروني مسجل لحساب آخر' }, 409);
+          if (body.developerName || body.devName || body.developer) {
+            const newDev = String(body.developerName || body.devName || body.developer).trim();
+            if (newDev) {
+              sub.devName = newDev;
+              sub.developer = newDev;
             }
-            currentDev.email = cleanEmail;
           }
-          if (body.newPassword && String(body.newPassword).length >= 6) {
-            currentDev.salt = toHex(crypto.getRandomValues(new Uint8Array(16)));
-            currentDev.passwordHash = await hashPassword(body.newPassword, currentDev.salt);
+          if (body.name) sub.name = String(body.name).trim();
+          if (body.iconUrl) sub.iconUrl = body.iconUrl;
+          if (body.screenshots && Array.isArray(body.screenshots)) sub.screenshots = body.screenshots.slice(0, 5);
+          if (body.shortDescription !== undefined) sub.shortDescription = body.shortDescription;
+          if (body.fullDescription !== undefined) sub.fullDescription = body.fullDescription;
+          if (body.targetType) sub.targetType = body.targetType.toUpperCase();
+          if (body.versionName) sub.versionName = body.versionName;
+          if (body.versionCode) sub.versionCode = toNum(body.versionCode, sub.versionCode);
+          if (body.sizeBytes) sub.sizeBytes = toNum(body.sizeBytes, sub.sizeBytes);
+          if (body.categoryId) {
+            const cat = (db.categories || []).find(c => c.id === body.categoryId);
+            if (cat) {
+              sub.categoryId = cat.id;
+              sub.categoryName = cat.name;
+            }
           }
-          currentDev.updatedAt = new Date().toISOString();
+
+          if (body.apkUrl && body.apkUrl !== sub.apkUrl) {
+            const verification = await verifyApkUrl(body.apkUrl);
+            if (!verification.valid) return badRequest(`فشل التحقق من رابط APK الجديد: ${verification.error}`);
+            sub.apkUrl = body.apkUrl.trim();
+            sub.apkVerification = verification;
+          }
+
+          // Security check: Developer cannot set status to 'approved' or 'rejected'!
+          // If status was changes_requested, putting it back to pending
+          if (sub.status === 'changes_requested') {
+            sub.status = 'pending';
+            sub.adminNotes = null;
+          }
+
+          sub.updatedAt = new Date().toISOString();
           await saveDb(env, db);
-          return json({
-            ok: true,
-            developer: { id: currentDev.id, fullName: currentDev.fullName, username: currentDev.username, email: currentDev.email }
-          });
-        }
-
-        // Developer Notifications
-        if (method === 'GET' && pathname === '/api/dev/notifications') {
-          const notifs = (db.notifications || []).filter(n => n.devId === currentDev.id);
-          return json({ items: notifs });
-        }
-
-        if (method === 'POST' && pathname === '/api/dev/notifications/read') {
-          (db.notifications || []).filter(n => n.devId === currentDev.id).forEach(n => { n.read = true; });
-          await saveDb(env, db);
-          return json({ ok: true });
-        }
-
-        // List developer's submissions
-        if (method === 'GET' && pathname === '/api/dev/submissions') {
-          const status = url.searchParams.get('status');
-          let items = (db.submissions || []).filter(s => s.devId === currentDev.id);
-          if (status) items = items.filter(s => s.status === status);
-          items.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-          return json({ items });
-        }
-
-        // Create new application submission
-        if (method === 'POST' && pathname === '/api/dev/submissions') {
-          const body = await readBody(request);
-
-          // Validation
-          if (!body.name || !String(body.name).trim()) return badRequest('اسم التطبيق مطلوب');
-          if (!body.iconUrl || !String(body.iconUrl).trim()) return badRequest('أيقونة التطبيق مطلوبة');
-          if (!body.apkUrl || !String(body.apkUrl).trim()) return badRequest('رابط APK المباشر مطلوب');
-
-          const categoryId = body.categoryId || 'misc';
-          const category = (db.categories || []).find(c => c.id === categoryId) || { id: 'misc', name: 'تطبيقات متنوعة' };
-
-          // Verify APK link
-          const verification = await verifyApkUrl(body.apkUrl);
-          if (!verification.valid) {
-            return badRequest(`فشل التحقق من رابط APK: ${verification.error}`);
-          }
-
-          const screenshots = Array.isArray(body.screenshots) ? body.screenshots.slice(0, 5) : [];
-          if (screenshots.length === 0 && body.screenshot) screenshots.push(body.screenshot);
-
-          const now = new Date().toISOString();
-          const reqNumber = generateReqNumber(db);
-
-          const sub = {
-            id: `sub_${Date.now()}_${crypto.randomUUID().slice(0, 6)}`,
-            reqNumber,
-            devId: currentDev.id,
-            devName: currentDev.fullName || currentDev.username,
-            devEmail: currentDev.email,
-            name: String(body.name).trim(),
-            packageName: body.packageName || `com.${currentDev.username}.${String(body.name).toLowerCase().replace(/[^a-z0-9]/g, '')}`,
-            versionName: body.versionName || '1.0.0',
-            versionCode: toNum(body.versionCode, 1),
-            sizeBytes: toNum(body.sizeBytes || verification.sizeBytes, 0),
-            developer: body.developer || currentDev.fullName || currentDev.username,
-            iconUrl: body.iconUrl,
-            screenshots,
-            apkUrl: body.apkUrl.trim(),
-            targetType: (body.targetType || 'TV').toUpperCase(),
-            categoryId: category.id,
-            categoryName: category.name,
-            shortDescription: body.shortDescription || '',
-            fullDescription: body.fullDescription || body.shortDescription || '',
-            status: 'pending',
-            adminNotes: null,
-            rejectionReason: null,
-            reviewedBy: null,
-            reviewedAt: null,
-            publishedAppId: null,
-            apkVerification: verification,
-            createdAt: now,
-            updatedAt: now
-          };
-
-          db.submissions = db.submissions || [];
-          db.submissions.unshift(sub);
-
-          // Developer notification
-          sendDevNotification(
-            db,
-            currentDev.id,
-            sub.id,
-            'تم استلام طلبك بنجاح',
-            `تم استلام طلب تقديم التطبيق (${sub.name}) برقم ${sub.reqNumber}. سيتم مراجعته من قبل الإدارة قريباً.`,
-            'info'
-          );
-
-          // Telegram notification to Admin
-          await sendTelegramNotification(
-            env,
-            db,
-            `📥 <b>طلب تطبيق جديد في AppLand</b>\n\n` +
-            `📱 <b>التطبيق:</b> ${sub.name}\n` +
-            `👤 <b>المطور:</b> ${sub.devName} (${sub.devEmail})\n` +
-            `🔖 <b>رقم الطلب:</b> <code>${sub.reqNumber}</code>\n` +
-            `📺 <b>الجهاز المستهدف:</b> ${sub.targetType}\n` +
-            `📂 <b>القسم:</b> ${sub.categoryName}\n\n` +
-            `🔗 راجع الطلب في لوحة الإدارة`
-          );
-
-          await saveDb(env, db);
-          return json(sub, 201);
-        }
-
-        // Details of specific submission
-        const devSubMatch = /^\/api\/dev\/submissions\/([^/]+)$/.exec(pathname);
-        if (devSubMatch) {
-          const id = decodeURIComponent(devSubMatch[1]);
-          const sub = (db.submissions || []).find(s => s.id === id);
-          if (!sub) return notFound('الطلب غير موجود');
-          if (sub.devId !== currentDev.id) return forbidden('ليس لديك صلاحية لعرض هذا الطلب');
-
-          if (method === 'GET') {
-            return json(sub);
-          }
-
-          // Edit submission (only allowed if pending or changes_requested)
-          if (method === 'PUT') {
-            if (sub.status !== 'pending' && sub.status !== 'changes_requested') {
-              return badRequest('لا يمكن تعديل هذا الطلب في حالته الحالية');
-            }
-
-            const body = await readBody(request);
-            if (body.name) sub.name = String(body.name).trim();
-            if (body.iconUrl) sub.iconUrl = body.iconUrl;
-            if (body.screenshots && Array.isArray(body.screenshots)) sub.screenshots = body.screenshots.slice(0, 5);
-            if (body.shortDescription !== undefined) sub.shortDescription = body.shortDescription;
-            if (body.fullDescription !== undefined) sub.fullDescription = body.fullDescription;
-            if (body.targetType) sub.targetType = body.targetType.toUpperCase();
-            if (body.versionName) sub.versionName = body.versionName;
-            if (body.versionCode) sub.versionCode = toNum(body.versionCode, sub.versionCode);
-            if (body.sizeBytes) sub.sizeBytes = toNum(body.sizeBytes, sub.sizeBytes);
-            if (body.categoryId) {
-              const cat = (db.categories || []).find(c => c.id === body.categoryId);
-              if (cat) {
-                sub.categoryId = cat.id;
-                sub.categoryName = cat.name;
-              }
-            }
-
-            if (body.apkUrl && body.apkUrl !== sub.apkUrl) {
-              const verification = await verifyApkUrl(body.apkUrl);
-              if (!verification.valid) return badRequest(`فشل التحقق من رابط APK الجديد: ${verification.error}`);
-              sub.apkUrl = body.apkUrl.trim();
-              sub.apkVerification = verification;
-            }
-
-            // If it was changes_requested, resubmission puts it back to pending
-            if (sub.status === 'changes_requested') {
-              sub.status = 'pending';
-              sub.adminNotes = null;
-              sendDevNotification(
-                db,
-                currentDev.id,
-                sub.id,
-                'تمت إعادة إرسال طلبك',
-                `تم حفظ تعديلاتك على تطبيق (${sub.name}) وإعادته لمرحلة المراجعة.`,
-                'info'
-              );
-            }
-
-            sub.updatedAt = new Date().toISOString();
-            await saveDb(env, db);
-            return json(sub);
-          }
+          return json(sub);
         }
       }
 
